@@ -117,10 +117,18 @@ services:
     networks:
       - caddy
       - temporal-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "const r=require('http').get('http://localhost:5000/',res=>process.exit(res.statusCode<500?0:1));r.on('error',()=>process.exit(1));r.setTimeout(4000,()=>{r.destroy();process.exit(1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
     depends_on:
       postiz-postgres:
         condition: service_healthy
       postiz-redis:
+        condition: service_healthy
+      temporal:
         condition: service_healthy
 
   postiz-postgres:
@@ -136,19 +144,21 @@ services:
     networks:
       - caddy
     healthcheck:
-      test: pg_isready -U postiz-user -d postiz-db-local
+      test: ["CMD-SHELL", "pg_isready -U postiz-user -d postiz-db-local"]
       interval: 10s
-      timeout: 3s
-      retries: 3
+      timeout: 5s
+      retries: 5
+      start_period: 10s
   postiz-redis:
     image: redis:7.2
     container_name: postiz-redis
     restart: always
     healthcheck:
-      test: redis-cli ping
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
       interval: 10s
-      timeout: 3s
-      retries: 3
+      timeout: 5s
+      retries: 5
+      start_period: 5s
     volumes:
       - postiz-redis-data:/data
     networks:
@@ -170,6 +180,7 @@ services:
   temporal-elasticsearch:
     container_name: temporal-elasticsearch
     image: elasticsearch:7.17.27
+    restart: always
     environment:
       - cluster.routing.allocation.disk.threshold_enabled=true
       - cluster.routing.allocation.disk.watermark.low=512mb
@@ -182,12 +193,19 @@ services:
       - temporal-network
     expose:
       - 9200
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS \"http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s\" || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
     volumes:
-      - /var/lib/elasticsearch/data
+      - temporal-elasticsearch-data:/usr/share/elasticsearch/data
 
   temporal-postgresql:
     container_name: temporal-postgresql
     image: postgres:16
+    restart: always
     environment:
       POSTGRES_PASSWORD: temporal
       POSTGRES_USER: temporal
@@ -195,17 +213,26 @@ services:
       - temporal-network
     expose:
       - 5432
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     volumes:
-      - /var/lib/postgresql/data
+      - temporal-postgres-data:/var/lib/postgresql/data
 
   temporal:
     container_name: temporal
+    restart: always
     ports:
       - '7233:7233'
     image: temporalio/auto-setup:1.28.1
     depends_on:
-      - temporal-postgresql
-      - temporal-elasticsearch
+      temporal-postgresql:
+        condition: service_healthy
+      temporal-elasticsearch:
+        condition: service_healthy
     environment:
       - DB=postgres12
       - DB_PORT=5432
@@ -219,6 +246,12 @@ services:
       - TEMPORAL_NAMESPACE=default
     networks:
       - temporal-network
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "temporal:7233"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     volumes:
       - ./dynamicconfig:/etc/temporal/config/dynamicconfig
     labels:
@@ -234,7 +267,8 @@ services:
       - temporal-network
     stdin_open: true
     depends_on:
-      - temporal
+      temporal:
+        condition: service_healthy
     tty: true
 
   temporal-ui:
@@ -259,6 +293,12 @@ volumes:
     external: false
 
   postiz-uploads:
+    external: false
+
+  temporal-postgres-data:
+    external: false
+
+  temporal-elasticsearch-data:
     external: false
 
 networks:

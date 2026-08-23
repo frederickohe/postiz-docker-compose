@@ -3,6 +3,7 @@ services:
     image: ghcr.io/gitroomhq/postiz-app:latest
     container_name: postiz
     restart: always
+    mem_limit: 1536m
     env_file:
       - .env
     environment:
@@ -11,6 +12,8 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://postiz-redis:6379}
       BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://localhost:3000}
       TEMPORAL_ADDRESS: ${TEMPORAL_ADDRESS:-temporal:7233}
+      # Postiz node was OOM-killed at ~1.5GiB RSS during host memory storms.
+      NODE_OPTIONS: ${NODE_OPTIONS:---max-old-space-size=768}
     volumes:
       - postiz-config:/config/
       - postiz-uploads:/uploads/
@@ -67,10 +70,12 @@ services:
     networks:
       - caddy
 
-  # For Application Monitoring / Debugging
+  # For Application Monitoring / Debugging (~220MiB). Opt-in so it does not
+  # compete with the API on the 8GB VPS. Start with: --profile debug
   spotlight:
     pull_policy: always
     container_name: spotlight
+    profiles: ["debug"]
     ports:
       - 8969:8969/tcp
     image: ghcr.io/getsentry/spotlight:latest
@@ -84,6 +89,7 @@ services:
     container_name: temporal-elasticsearch
     image: elasticsearch:7.17.27
     restart: always
+    mem_limit: 900m
     environment:
       - cluster.routing.allocation.disk.threshold_enabled=true
       - cluster.routing.allocation.disk.watermark.low=512mb

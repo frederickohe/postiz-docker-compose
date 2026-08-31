@@ -1,6 +1,9 @@
 services:
   postiz:
-    image: ghcr.io/gitroomhq/postiz-app:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: postiz-autobus:latest
     container_name: postiz
     restart: always
     mem_limit: 1536m

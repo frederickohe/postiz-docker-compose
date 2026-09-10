@@ -122,3 +122,89 @@ patchJob({
   alreadyOkMessage:
     "YouTube providers already omit restricted youtubepartner scope",
 });
+
+const CREATOR_INFO_MARKER = "autobus-tiktok-creator-info";
+const CREATOR_INFO_SNIPPET = `
+/* ${CREATOR_INFO_MARKER} */
+(function () {
+  function attach(proto) {
+    if (!proto || proto.queryCreatorInfo) return;
+    proto.queryCreatorInfo = async function (accessToken) {
+      const res = await fetch(
+        "https://open.tiktokapis.com/v2/post/publish/creator_info/query/",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json; charset=UTF-8",
+            Authorization: "Bearer " + accessToken,
+          },
+        }
+      );
+      return await res.json();
+    };
+    proto.fetchPublishStatus = async function (accessToken, data) {
+      const publishId =
+        (data && (data.publish_id || data.publishId)) ||
+        (data && data.data && data.data.publish_id);
+      const res = await fetch(
+        "https://open.tiktokapis.com/v2/post/publish/status/fetch/",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json; charset=UTF-8",
+            Authorization: "Bearer " + accessToken,
+          },
+          body: JSON.stringify({ publish_id: publishId }),
+        }
+      );
+      return await res.json();
+    };
+  }
+  try {
+    if (typeof exports !== "undefined" && exports.TiktokProvider) {
+      attach(exports.TiktokProvider.prototype);
+    }
+  } catch (e) {}
+})();
+`;
+
+function injectCreatorInfo(preferred) {
+  let files = collect(preferred);
+  if (files.length === 0) {
+    for (const root of ["/app/apps", "/app/libraries", "/app"]) {
+      if (fs.existsSync(root)) walk(root, files);
+    }
+    files = files.filter(
+      (file) =>
+        /tiktok\.provider\.(js|ts)$/.test(file) ||
+        file.toLowerCase().includes("tiktok.provider")
+    );
+  }
+
+  let patched = 0;
+  for (const file of files) {
+    let original;
+    try {
+      original = fs.readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    if (!/TiktokProvider/.test(original)) continue;
+    if (original.includes(CREATOR_INFO_MARKER)) continue;
+    fs.writeFileSync(file, original + "\n" + CREATOR_INFO_SNIPPET);
+    console.log("injected creator_info into", file);
+    patched += 1;
+  }
+  if (patched > 0) {
+    console.log(`TikTok creator_info: injected into ${patched} file(s)`);
+    return;
+  }
+  console.log("TikTok creator_info helper already present or provider not found");
+}
+
+injectCreatorInfo([
+  "/app/apps/backend/dist/libraries/nestjs-libraries/src/integrations/social/tiktok.provider.js",
+  "/app/apps/orchestrator/dist/libraries/nestjs-libraries/src/integrations/social/tiktok.provider.js",
+  "/app/libraries/nestjs-libraries/src/integrations/social/tiktok.provider.ts",
+]);
+

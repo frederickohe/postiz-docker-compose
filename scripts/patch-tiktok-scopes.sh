@@ -142,6 +142,7 @@ const CREATOR_INFO_SNIPPET = `
       );
       return await res.json();
     };
+    proto.getCreatorInfo = proto.queryCreatorInfo;
     proto.fetchPublishStatus = async function (accessToken, data) {
       const publishId =
         (data && (data.publish_id || data.publishId)) ||
@@ -203,6 +204,62 @@ function injectCreatorInfo(preferred) {
 }
 
 injectCreatorInfo([
+  "/app/apps/backend/dist/libraries/nestjs-libraries/src/integrations/social/tiktok.provider.js",
+  "/app/apps/orchestrator/dist/libraries/nestjs-libraries/src/integrations/social/tiktok.provider.js",
+  "/app/libraries/nestjs-libraries/src/integrations/social/tiktok.provider.ts",
+]);
+
+const GET_CREATOR_ALIAS_MARKER = "autobus-tiktok-getCreatorInfo-alias";
+const GET_CREATOR_ALIAS_SNIPPET = `
+/* ${GET_CREATOR_ALIAS_MARKER} */
+(function () {
+  try {
+    var proto =
+      typeof exports !== "undefined" && exports.TiktokProvider
+        ? exports.TiktokProvider.prototype
+        : null;
+    if (proto && proto.queryCreatorInfo && !proto.getCreatorInfo) {
+      proto.getCreatorInfo = proto.queryCreatorInfo;
+    }
+  } catch (e) {}
+})();
+`;
+
+function aliasGetCreatorInfo(preferred) {
+  let files = collect(preferred);
+  if (files.length === 0) {
+    for (const root of ["/app/apps", "/app/libraries", "/app"]) {
+      if (fs.existsSync(root)) walk(root, files);
+    }
+    files = files.filter(
+      (file) =>
+        /tiktok\.provider\.(js|ts)$/.test(file) ||
+        file.toLowerCase().includes("tiktok.provider")
+    );
+  }
+
+  let patched = 0;
+  for (const file of files) {
+    let original;
+    try {
+      original = fs.readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    if (!/TiktokProvider/.test(original)) continue;
+    if (original.includes(GET_CREATOR_ALIAS_MARKER)) continue;
+    fs.writeFileSync(file, original + "\n" + GET_CREATOR_ALIAS_SNIPPET);
+    console.log("aliased getCreatorInfo in", file);
+    patched += 1;
+  }
+  if (patched > 0) {
+    console.log(`TikTok getCreatorInfo alias: injected into ${patched} file(s)`);
+    return;
+  }
+  console.log("TikTok getCreatorInfo alias already present or provider not found");
+}
+
+aliasGetCreatorInfo([
   "/app/apps/backend/dist/libraries/nestjs-libraries/src/integrations/social/tiktok.provider.js",
   "/app/apps/orchestrator/dist/libraries/nestjs-libraries/src/integrations/social/tiktok.provider.js",
   "/app/libraries/nestjs-libraries/src/integrations/social/tiktok.provider.ts",

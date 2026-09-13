@@ -5,10 +5,14 @@
  * TikTok: video.list / video.create are no longer offered ("scope" error).
  *   Strip them from quoted scope lists only — leave /v2/video/list/ API paths.
  *
- * YouTube: youtubepartner is a restricted CMS/Content ID scope. Regular
- *   channels cannot grant it. Google then shows "Sorry, something went wrong"
- *   plus a security alert, even for OAuth testers. Uploading only needs
- *   youtube / youtube.upload / youtube.force-ssl.
+ * YouTube: keep only the scopes submitted on the Google Cloud Console Data
+ *   Access screen (plus non-sensitive userinfo for the OAuth handshake).
+ *   Connect uses youtube.readonly (channels.list mine=true). Publish uses
+ *   youtube.upload (resumable videos.insert + thumbnails.set), which also
+ *   sets title, description, tags, privacy, and made-for-kids. Drop the
+ *   rest: youtube (full manage), youtube.force-ssl, youtubepartner, and
+ *   yt-analytics.readonly. Those extras fail Google's least-privilege
+ *   review and are not needed for Autobus connect + post.
  */
 const fs = require("fs");
 const path = require("path");
@@ -110,18 +114,106 @@ patchJob({
     "TikTok providers already omit deprecated video.list / video.create scopes",
 });
 
-patchJob({
-  name: "YouTube",
-  preferred: [
-    "/app/apps/backend/dist/libraries/nestjs-libraries/src/integrations/social/youtube.provider.js",
-    "/app/apps/orchestrator/dist/libraries/nestjs-libraries/src/integrations/social/youtube.provider.js",
-    "/app/libraries/nestjs-libraries/src/integrations/social/youtube.provider.ts",
-  ],
-  drop: ["https://www.googleapis.com/auth/youtubepartner"],
-  marker: "youtube.upload",
-  alreadyOkMessage:
-    "YouTube providers already omit restricted youtubepartner scope",
-});
+const YOUTUBE_SCOPES_KEEP = [
+  "https://www.googleapis.com/auth/userinfo.profile",
+  "https://www.googleapis.com/auth/userinfo.email",
+  "https://www.googleapis.com/auth/youtube.readonly",
+  "https://www.googleapis.com/auth/youtube.upload",
+];
+
+const YOUTUBE_SCOPES_DROP = [
+  "https://www.googleapis.com/auth/youtube",
+  "https://www.googleapis.com/auth/youtube.force-ssl",
+  "https://www.googleapis.com/auth/youtubepartner",
+  "https://www.googleapis.com/auth/yt-analytics.readonly",
+];
+
+function rewriteYoutubeScopesArray(text) {
+  return text.replace(/scopes\s*([:=])\s*\[[\s\S]*?\]/, (match, eq) => {
+    if (
+      !match.includes("youtube.upload") &&
+      !YOUTUBE_SCOPES_DROP.some((scope) => match.includes(scope))
+    ) {
+      return match;
+    }
+    const quote = match.includes("'") ? "'" : '"';
+    const inner = YOUTUBE_SCOPES_KEEP.map((scope) => `${quote}${scope}${quote}`).join(
+      ", "
+    );
+    return `scopes${eq}[${inner}]`;
+  });
+}
+
+function quotedScopePresent(text, scope) {
+  return text.includes(`"${scope}"`) || text.includes(`'${scope}'`);
+}
+
+function patchYoutubeScopes(preferred) {
+  let files = collect(preferred);
+  if (files.length === 0) {
+    for (const root of ["/app/apps", "/app/libraries", "/app"]) {
+      if (fs.existsSync(root)) walk(root, files);
+    }
+    files = files.filter(
+      (file) =>
+        /youtube\.provider\.(js|ts)$/.test(file) ||
+        file.toLowerCase().includes("youtube.provider")
+    );
+  }
+
+  let patched = 0;
+  for (const file of files) {
+    let original;
+    try {
+      original = fs.readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    if (
+      !original.includes("youtube.upload") &&
+      !YOUTUBE_SCOPES_DROP.some((scope) => original.includes(scope))
+    ) {
+      continue;
+    }
+    let next = rewriteYoutubeScopesArray(original);
+    next = stripQuoted(next, YOUTUBE_SCOPES_DROP);
+    if (next === original) continue;
+    fs.writeFileSync(file, next);
+    console.log("patched", file);
+    patched += 1;
+  }
+
+  if (patched > 0) {
+    console.log(
+      `YouTube: limited OAuth scopes to readonly + upload (+ userinfo) in ${patched} file(s)`
+    );
+    return;
+  }
+
+  const stillHas = files.some((file) => {
+    try {
+      const text = fs.readFileSync(file, "utf8");
+      return YOUTUBE_SCOPES_DROP.some((scope) => quotedScopePresent(text, scope));
+    } catch {
+      return false;
+    }
+  });
+  if (stillHas) {
+    console.error(
+      `YouTube: found extra scopes but could not patch them (${YOUTUBE_SCOPES_DROP.join(", ")})`
+    );
+    process.exit(1);
+  }
+  console.log(
+    "YouTube providers already request only youtube.readonly + youtube.upload (+ userinfo)"
+  );
+}
+
+patchYoutubeScopes([
+  "/app/apps/backend/dist/libraries/nestjs-libraries/src/integrations/social/youtube.provider.js",
+  "/app/apps/orchestrator/dist/libraries/nestjs-libraries/src/integrations/social/youtube.provider.js",
+  "/app/libraries/nestjs-libraries/src/integrations/social/youtube.provider.ts",
+]);
 
 const CREATOR_INFO_MARKER = "autobus-tiktok-creator-info";
 const CREATOR_INFO_SNIPPET = `
